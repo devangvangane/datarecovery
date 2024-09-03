@@ -2,7 +2,7 @@ import os
 import tkinter as tk
 import psutil
 from tkinter import ttk
-
+import time
 
 filetype_footer_header = {".png": [b"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", b"\x49\x45\x4E\x44\xAE\x42\x60\x82", "PNG"],
                           ".jpg": [b"\xff\xd8\xff\xe0\x00\x10\x4a\x46", b"\xff\xd9", "JPG"],
@@ -10,13 +10,33 @@ filetype_footer_header = {".png": [b"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", b"\x49\x
                           ".doc": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "DOC"]}
 
 
-def list_drives():
+def list_drives_windows():
     partitions = psutil.disk_partitions()
     drives = []
     for partition in partitions:
         drive_letter = partition.device[0:2]
         drives.append(drive_letter)
     return drives
+
+
+def list_drives_linux():
+    partitions = psutil.disk_partitions()
+    drives = []
+    for partition in partitions:
+        if partition.device.startswith('/dev/'):
+            drives.append(partition.device)
+    return drives
+
+
+def update_drives(event):
+    selected_os = osystem.get()
+    if selected_os == "Windows":
+        driveOptions = list_drives_windows()
+    else:
+        driveOptions = list_drives_linux()
+
+    driveDropdown['values'] = driveOptions
+    driveDropdown.set("Select Available Drive to Scan")
 
 
 def recover_File():
@@ -32,20 +52,16 @@ def recover_File():
     offs = 0
     rcvd = 0
 
-    root.geometry("480x460")
-
     directory = 'recFiles'
     if not os.path.exists(directory):
         os.makedirs(directory)
 
     while byte:
         found = byte.find(file_header)  # PNG header
+
         if found >= 0:
             drec = True
-            print(f'== Found {selected_filetype} at location: ' + str(hex(found + (size * offs))) + ' ==')
-
-            text_area.insert(tk.END, f'== Found {selected_filetype} at location: ' + str(hex(found + (size * offs))) + ' ==')
-            text_area.see(tk.END)
+            # print(f'== Found {selected_filetype} at location: ' + str(hex(found + (size * offs))) + ' ==')
 
             fileN = open(os.path.join(directory, str(rcvd) + selected_filetype), "wb")
             fileN.write(byte[found:])
@@ -55,10 +71,9 @@ def recover_File():
                 if bfind >= 0:
                     fileN.write(byte[:bfind + 2])
                     fileD.seek((offs + 1) * size)
-                    print(f'== Wrote {selected_filetype} to location: ' + os.path.join(directory, str(rcvd) + fileDropdown.get()) + ' ==\n')
+                    # print(f'== Wrote {selected_filetype} to location: ' + os.path.join(directory, str(rcvd) + fileDropdown.get()) + ' ==\n')
 
-                    text_area.insert(tk.END, f'== Wrote {selected_filetype} to location: ' + os.path.join(directory, str(rcvd) + fileDropdown.get()) + ' ==\n')
-
+                    # text_area.insert(tk.END, f'== Wrote {selected_filetype} to location: ' + os.path.join(directory, str(rcvd) + fileDropdown.get()) + ' ==\n')
                     drec = False
                     rcvd += 1
                     fileN.close()
@@ -80,25 +95,29 @@ headLabel = tk.Label(root,
                      pady=10)
 headLabel.pack()
 
-driveOptions = list_drives()
-driveDropdown = ttk.Combobox(root, values=driveOptions)
-driveDropdown.set("Select Available Drive to Scan")
-driveDropdown.place(x=20, y=70)
-driveDropdown.config(width=30)
 style = ttk.Style()
 style.configure("TCombobox", padding=(20, 10, 20, 10), font=("Arial", 14))
 
+osOptions = ["Windows", "Linux"]
+osystem = ttk.Combobox(root, values=osOptions)
+osystem.set("Select Operating System")
+osystem.place(x=20, y=70)
+osystem.config(width=30)
+osystem.config(style="TCombobox")
+osystem.bind("<<ComboboxSelected>>", update_drives)
+
+driveDropdown = ttk.Combobox(root)
+driveDropdown.set("Select Available Drive to Scan")
+driveDropdown.place(x=20, y=130)
+driveDropdown.config(width=30)
 driveDropdown.config(style="TCombobox")
 
 fileTypes = [".png", ".jpg", ".pdf", ".doc", ".txt", ".docx"]
 fileDropdown = ttk.Combobox(root, values=fileTypes)
 fileDropdown.set("Select File Type")
-fileDropdown.place(x=20, y=130)
+fileDropdown.place(x=20, y=190)
 fileDropdown.config(width=30)
 fileDropdown.config(style="TCombobox")
-
-text_area = tk.Text(root, height=10, width=40, font=("Arial", 14))
-text_area.place(x=20, y=230)
 
 recoverButton = tk.Button(root,
                           font=("Arial", 13, "bold"),
@@ -108,6 +127,6 @@ recoverButton = tk.Button(root,
                           cursor="hand2",
                           command=recover_File)
 recoverButton.config(text=f"Recover files")
-recoverButton.place(x=20, y=190)
+recoverButton.place(x=20, y=250)
 
 root.mainloop()
