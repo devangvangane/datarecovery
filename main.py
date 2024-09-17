@@ -4,6 +4,7 @@ import psutil
 from tkinter import ttk
 import threading
 import hashlib
+import time
 
 filetype_footer_header = {".png": [b"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", b"\x49\x45\x4E\x44\xAE\x42\x60\x82", "PNG"],
                           ".jpg": [b"\xff\xd8\xff\xe0\x00\x10\x4a\x46", b"\xff\xd9", "JPG"],
@@ -12,7 +13,13 @@ filetype_footer_header = {".png": [b"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", b"\x49\x
                           ".docx": [b"PK\x03\x04", None, "DOCX"],
                           ".ppt": [b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", None, "PPT"],
                           ".pptx": [b"\x50\x4B\03\x04", b"\x50\x4B\x05\x06", "PPTX"],
-                          ".txt": [None, None, "TXT"]}
+                          ".xls": [b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", None, "XLS"],  # No defined footer
+                          ".xlsx": [b"\x50\x4B\x03\x04", b"\x50\x4B\x05\x06", "XLSX"],
+                          ".gif": [[b"GIF87a", b"\x3B", "GIF"], [b"GIF89a", b"\x3B", "GIF"]],  # For GIF87a
+                          ".exe": [b"\x4D\x5A", None, "EXE"],
+                          ".txt": [None, None, "TXT"],
+                          ".py": [None, None, "PY"],
+                          ".rar": [b"\x52\x61\x72\x21\x1A\x07\x00", None, "RAR"],}
 
 
 def start_recovery():
@@ -57,9 +64,30 @@ def update_drives(event):
 
 
 def is_printable(byte_seq):
-    return all(0x20 <= b <= 0x7E for b in byte_seq)
-    # printable = set(bytes(string.printable, 'ascii'))  # ASCII encoded printable characters
-    # return all(b in printable for b in byte_seq)
+    printable_chars = set(range(0x20, 0x7E + 1))  # ASCII printable characters
+    printable_chars.add(0x0A)  # newline (\n)
+    printable_chars.add(0x0D)  # carriage return (\r)
+    return all(b in printable_chars for b in byte_seq)
+
+
+# def is_python_file(byte_seq):
+#     # Decode bytes to string assuming UTF-8 encoding
+#     try:
+#         text = byte_seq.decode('utf-8')
+#     except UnicodeDecodeError:
+#         return False
+#
+#     # Simple checks for Python file structure
+#     common_python_keywords = ["import", "def", "class", "from", "if", "while", "for", "print"]
+#     for keyword in common_python_keywords:
+#         if keyword in text:
+#             return True
+#
+#     # Check for typical Python comment or encoding declaration
+#     if text.startswith("#") or "# -*- coding:" in text:
+#         return True
+#
+#     return False
 
 
 def recover_File():
@@ -67,16 +95,28 @@ def recover_File():
     selected_filetype = fileDropdown.get()
     file_header = None
     file_footer = None
-    if selected_filetype != ".txt":
+    if selected_filetype != ".txt" or selected_filetype != ".gif" or selected_filetype != ".py":
         file_header = filetype_footer_header[selected_filetype][0]
         file_footer = filetype_footer_header[selected_filetype][1]
 
+    if selected_filetype == ".gif":
+        file_header = [filetype_footer_header[".gif"][0][0], filetype_footer_header[".gif"][1][0]]
+        file_footer = b"\x3B"
+
+    if selected_filetype == ".py":
+        file_header = None
+        file_footer = None
+
     drive = f"\\\\.\\{selected_drive}"
     fileD = open(drive, "rb")
-    if selected_filetype in [".pdf", ".txt"]:
-        size = 16384
-    else:
-        size = 1024
+
+    total_size = os.path.getsize(drive) if os.path.exists(drive) else 10000000  # Fallback to estimate size
+    size = 1024 if selected_filetype not in [".pdf", ".txt"] else 16384
+    total_blocks = total_size // size
+
+    progress_var.set(0)
+    progress_bar["maximum"] = total_blocks
+
     byte = fileD.read(size)
     offs = 0
     rcvd = 0
@@ -85,96 +125,263 @@ def recover_File():
     if not os.path.exists(directory):
         os.makedirs(directory)
 
+    recovered_hashes = set()
+
     while byte:
-        if selected_filetype == ".txt" and is_printable(byte):
-            print("entered if block")
-            with open(os.path.join(directory, str(rcvd) + ".txt"), "wb") as fileN:
-                print("Opened file")
-                fileN.write(byte)
-                while True:
+        if selected_filetype == ".py":
+            keywords = [b"import", b"def", b"class", b"# -*- coding: utf-8 -*-"]  # Common Python file keywords
+            found = False
+            for keyword in keywords:
+                if byte.find(keyword) >= 0:
+                    found = True
+                    break
+            if found:
+                file_hash = calculate_hash(byte)
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f'{int(time.time())}-python_file_{rcvd}.py'), "wb") as fileN:
+                        try:
+                            # Try to decode bytes only for .py files, but catch decoding errors
+                            text = byte.decode('utf-8', errors='ignore')  # 'ignore' will skip non-UTF-8 bytes
+                            fileN.write(text.encode('utf-8'))  # Write back as UTF-8 after decoding
+                        except UnicodeDecodeError as e:
+                            print(f"Decoding error: {e}")
+                            # If there are issues decoding, you can either skip or handle as necessary
+                        recovered_hashes.add(file_hash)
+                        max_size = 2 * 1024 * 1024  # Set a 10 MB limit for .py files
+                        written_size = 0
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte or written_size >= max_size:
+                                break
+                            fileN.write(byte)  # Write the rest as binary or handle decoding carefully
+                            written_size += len(byte)
+                    rcvd += 1
+
+        # if selected_filetype == ".txt" and is_printable(byte):
+        #     file_hash = calculate_hash(byte)
+        #     if file_hash not in recovered_hashes:
+        #         with open(os.path.join(directory, f'{int(time.time())}_txt_file_' + str(rcvd) + ".txt"), "wb") as fileN:
+        #             fileN.write(byte)
+        #             recovered_hashes.add(file_hash)
+        #             while True:
+        #                 byte = fileD.read(size)
+        #                 if not byte or not is_printable(byte):
+        #                     break
+        #                 fileN.write(byte)
+        #         rcvd += 1
+        #     byte = fileD.read(size)
+        #     continue
+
+        if selected_filetype == ".txt":
+            text_block = b''
+            print(f"Reading block {offs} for TXT recovery")
+            # Collect printable byte sequences as long as the content looks like text
+            while byte:
+                if is_printable(byte):
+                    text_block += byte
                     byte = fileD.read(size)
-                    print("read file")
-                    if not byte or not is_printable(byte):
+                else:
+                    print(f"Non-printable byte sequence found at offset {offs}")
+                    break
+
+            if text_block:
+                print(f"Recovered a text block of size {len(text_block)} bytes")
+
+                # Try multiple encodings for decoding
+                decoded_text = None
+                for encoding in ['utf-8', 'iso-8859-1', 'ascii']:
+                    try:
+                        decoded_text = text_block.decode(encoding, errors='replace')  # Replace invalid characters
+                        print(f"Decoded text block using {encoding} encoding.")
                         break
-                    fileN.write(byte)
-                    print("writing file")
-            rcvd += 1
+                    except (UnicodeDecodeError, LookupError):
+                        print(f"Decoding with {encoding} failed. Trying next encoding.")
+
+                if decoded_text is None:
+                    decoded_text = text_block.decode('utf-8', errors='ignore')  # Ignore invalid characters
+                    print(f"Using fallback decoding (ignoring invalid characters).")
+
+                # Save the recovered text as a .txt file
+                with open(os.path.join(directory, f"{rcvd}.txt"), "w", encoding='utf-8') as fileN:
+                    fileN.write(decoded_text)
+                rcvd += 1
+            else:
+                print("No valid text block found in this iteration.")
+            byte = fileD.read(size)
+            offs += 1
             continue
+
+        if selected_filetype == ".rar":
+            found = byte.find(file_header)
+            if found >= 0:
+                file_hash = calculate_hash(byte[found:])
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f"{int(time.time())}_rar_file_{rcvd}.rar"), "wb") as fileN:
+                        fileN.write(byte[found:])
+                        recovered_hashes.add(file_hash)
+
+                        # Keep reading blocks until next file or EOF
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+                            next_header_pos = byte.find(file_header)
+                            if next_header_pos >= 0:
+                                fileN.write(byte[:next_header_pos])
+                                break
+                            else:
+                                fileN.write(byte)
+            rcvd += 1
+
+        if selected_filetype == ".gif":
+            for header in file_header:
+                found = byte.find(header)
+                if found >= 0:
+                    file_hash = calculate_hash(byte[found:])
+                    if file_hash not in recovered_hashes:
+                        with open(os.path.join(directory,
+                                               f"{int(time.time())}_{filetype_footer_header['.gif'][0][2]}_{rcvd}.gif"),
+                                  "wb") as fileN:
+                            fileN.write(byte[found:])
+                            recovered_hashes.add(file_hash)
+                            while True:
+                                byte = fileD.read(size)
+                                if not byte:
+                                    break
+                                footer_pos = byte.find(file_footer)
+                                if footer_pos >= 0:
+                                    fileN.write(byte[:footer_pos + 1])  # Include the footer byte
+                                    break
+                                else:
+                                    fileN.write(byte)
+                        rcvd += 1
+                    break
+            byte = fileD.read(size)
+            offs += 1
+
+        if selected_filetype == ".exe": # Still Issue
+            # Search for EXE header
+            found = byte.find(file_header)
+            if found >= 0:
+                file_hash = calculate_hash(byte[found:])
+                if file_hash not in recovered_hashes:
+                    # Start writing the EXE file once the header is found
+                    with open(os.path.join(directory, f"{int(time.time())}_exe_file_{rcvd}.exe"), "wb") as fileN:
+                        fileN.write(byte[found:])
+                        recovered_hashes.add(file_hash)
+
+                        total_written = len(byte[found:])
+
+                        # Keep reading and writing until the next file header or EOF
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+
+                            # Check for the start of another file (e.g., another EXE or other headers)
+                            next_header_pos = byte.find(file_header)
+                            if next_header_pos >= 0:
+                                fileN.write(byte[:next_header_pos])
+                                break
+                            else:
+                                fileN.write(byte)
+                            offs += 1
+                            progress_var.set(offs)
+                            root.update_idletasks()
+
+                    rcvd += 1  # Increment recovered file count
+            else:
+                offs += 1  # No file header found, move forward
+
+            # Read next block of data for the outer loop
+            byte = fileD.read(size)
 
         if selected_filetype == ".ppt":
             found = byte.find(file_header)  # PPT header
             if found >= 0:
-                # print(f"Found PPT header at offset: {found + offs * size}")
-                with open(os.path.join(directory, f"ppt_file_{rcvd}.ppt"), "wb") as fileN:
-                    fileN.write(byte[found:])
-                    while True:
-                        byte = fileD.read(size)
-                        if not byte:
-                            break
-                        # Continue reading until the end of the file
-                        fileN.write(byte)
-                rcvd += 1
+                file_hash = calculate_hash(byte[found:])
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f"{int(time.time())}_ppt_file_{rcvd}.ppt"), "wb") as fileN:
+                        fileN.write(byte[found:])
+                        recovered_hashes.add(file_hash)
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+                            # Continue reading until the end of the file
+                            fileN.write(byte)
+                    rcvd += 1
                 byte = fileD.read(size)
                 offs += 1
                 continue
 
-        if selected_filetype == ".doc":
+        if selected_filetype == ".doc" or selected_filetype == ".xls":
             found = byte.find(file_header)
             if found >= 0:
-                with open(os.path.join(directory, f"doc_file_{rcvd}.doc"), "wb") as fileN:
-                    fileN.write(byte[found:])
-                    while True:
-                        byte = fileD.read(size)
-                        if not byte:
-                            break
-                        fileN.write(byte)
-                rcvd += 1
+                file_hash = calculate_hash(byte[found:])
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory,
+                                           f"{int(time.time())}-{filetype_footer_header[selected_filetype][2]}_file_{rcvd}{selected_filetype}"),
+                              "wb") as fileN:
+                        fileN.write(byte[found:])
+                        recovered_hashes.add(file_hash)
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+                            fileN.write(byte)
+                    rcvd += 1
                 continue
 
-        if selected_filetype == ".docx":
+        if selected_filetype == ".docx" or selected_filetype == ".xlsx":
             if byte.startswith(file_header):
-                with open(os.path.join(directory, f"docx_file_{rcvd}.docx"), "wb") as fileN:
-                    fileN.write(byte)
-                    while True:
-                        byte = fileD.read(size)
-                        if not byte:
-                            break
+                file_hash = calculate_hash(byte)
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory,
+                                           f"{int(time.time())}-{filetype_footer_header[selected_filetype][2]}_file_{rcvd}{selected_filetype}"),
+                              "wb") as fileN:
                         fileN.write(byte)
-                rcvd += 1
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+                            fileN.write(byte)
+                    rcvd += 1
                 continue
 
-        if selected_filetype not in [".txt", ".doc", ".docx", ".ppt"]:
-
-            found = byte.find(file_header)  # PNG header
-            # print(found)
+        if selected_filetype not in [".txt", ".doc", ".docx", ".ppt", ".exe", ".xlsx", ".xls", ".gif", ".py", ".rar"]:
+            found = byte.find(file_header)
             if found >= 0:
                 drec = True
-                # print(f'== Found {selected_filetype} at location: ' + str(hex(found + (size * offs))) + ' ==')
-
-                fileN = open(os.path.join(directory, str(rcvd) + selected_filetype), "wb")
-                fileN.write(byte[found:])
-                while drec:
-                    byte = fileD.read(size)
-                    bfind = byte.find(file_footer)
-                    if bfind >= 0:
-                        fileN.write(byte[:bfind + len(file_footer)])
-                        fileD.seek((offs + 1) * size)
-                        # print(f'== Wrote {selected_filetype} to location: ' + os.path.join(directory, str(rcvd) + fileDropdown.get()) + ' ==\n')
-
-                        drec = False
-                        rcvd += 1
-                        fileN.close()
-                    else:
-                        fileN.write(byte)
+                file_hash = calculate_hash(byte[found:])
+                if file_hash not in recovered_hashes:
+                    fileN = open(os.path.join(directory,
+                                              f"{int(time.time())}-{filetype_footer_header[selected_filetype][2]}_file_" + str(
+                                                  rcvd) + selected_filetype), "wb")
+                    fileN.write(byte[found:])
+                    while drec:
+                        byte = fileD.read(size)
+                        bfind = byte.find(file_footer)
+                        if bfind >= 0:
+                            fileN.write(byte[:bfind + len(file_footer)])
+                            fileD.seek((offs + 1) * size)
+                            drec = False
+                            rcvd += 1
+                            fileN.close()
+                        else:
+                            fileN.write(byte)
         byte = fileD.read(size)
         offs += 1
+
+        progress_var.set(offs)
+        root.update_idletasks()
 
     fileD.close()
 
 
 root = tk.Tk()
 root.title("Data Recovery Application")
-root.geometry("500x340")
+root.geometry("500x400")
 
 headLabel = tk.Label(root,
                      text="Data Recovery Application",
@@ -199,7 +406,7 @@ driveDropdown.place(x=30, y=130)
 driveDropdown.config(width=30)
 driveDropdown.config(style="TCombobox")
 
-fileTypes = [".png", ".jpg", ".pdf", ".doc", ".txt", ".docx", ".ppt", ".pptx"]
+fileTypes = [".png", ".jpg", ".pdf", ".doc", ".txt", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".gif", ".exe", ".py", ".rar"]
 fileDropdown = ttk.Combobox(root, values=fileTypes)
 fileDropdown.set("Select File Type")
 fileDropdown.place(x=30, y=190)
@@ -216,8 +423,8 @@ recoverButton = tk.Button(root,
 recoverButton.config(text=f"Recover files")
 recoverButton.place(x=40, y=250)
 
-root.mainloop()
+progress_var = tk.DoubleVar()
+progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate", variable=progress_var)
+progress_bar.place(x=30, y=320)
 
-# coins - 2.47MB
-# boats - 4.05MB
-# pdf 37.9kb
+root.mainloop()
