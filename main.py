@@ -185,6 +185,43 @@ def recover_File():
                             written_size += len(byte)
                     rcvd += 1
 
+        if selected_filetype == ".c":
+            if file_header in byte:
+                file_hash = calculate_hash(byte)
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f'{int(time.time())}-c_file_{rcvd}.c'), "wb") as fileN:
+                        fileN.write(byte)
+                        recovered_hashes.add(file_hash)
+
+                        max_size = 2 * 1024 * 1024  # 2MB max per file
+                        written_size = 0
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte or written_size >= max_size:
+                                break
+                            fileN.write(byte)
+                            written_size += len(byte)
+                    rcvd += 1
+
+            # Handle Java files
+        if selected_filetype == ".java":
+            if file_header in byte:
+                file_hash = calculate_hash(byte)
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f'{int(time.time())}-java_file_{rcvd}.java'), "wb") as fileN:
+                        fileN.write(byte)
+                        recovered_hashes.add(file_hash)
+
+                        max_size = 2 * 1024 * 1024  # 2MB max per file
+                        written_size = 0
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte or written_size >= max_size:
+                                break
+                            fileN.write(byte)
+                            written_size += len(byte)
+                    rcvd += 1
+
         # if selected_filetype == ".txt" and is_printable(byte):
         #     file_hash = calculate_hash(byte)
         #     if file_hash not in recovered_hashes:
@@ -430,7 +467,7 @@ def recover_File():
                             fileN.write(byte)
                 rcvd += 1
 
-        if selected_filetype not in [".txt", ".doc", ".docx", ".ppt", ".exe", ".xlsx", ".xls", ".gif", ".py", ".rar"]:
+        if selected_filetype not in [".c", ".java", ".txt", ".doc", ".docx", ".ppt", ".exe", ".xlsx", ".xls", ".gif", ".py", ".rar"]:
             found = byte.find(file_header)
             if found >= 0:
                 drec = True
@@ -488,7 +525,7 @@ driveDropdown.config(width=30)
 driveDropdown.config(style="TCombobox")
 
 fileTypes = [".png", ".jpg", ".pdf", ".doc", ".txt", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".gif", ".exe", ".py",
-             ".rar"]
+             ".rar", ".c", ".java"]
 fileDropdown = ttk.Combobox(root, values=fileTypes)
 fileDropdown.set("Select File Type")
 fileDropdown.place(x=30, y=190)
