@@ -5,6 +5,7 @@ from tkinter import ttk
 import threading
 import hashlib
 import time
+from tkinter import messagebox
 
 filetype_footer_header = {".png": [b"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", b"\x49\x45\x4E\x44\xAE\x42\x60\x82", "PNG"],
                           ".jpg": [b"\xff\xd8\xff\xe0\x00\x10\x4a\x46", b"\xff\xd9", "JPG"],
@@ -19,13 +20,42 @@ filetype_footer_header = {".png": [b"\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", b"\x49\x
                           ".exe": [b"\x4D\x5A", None, "EXE"],
                           ".txt": [None, None, "TXT"],
                           ".py": [None, None, "PY"],
-                          ".rar": [b"\x52\x61\x72\x21\x1A\x07\x00", None, "RAR"],}
+                          ".rar": [b"\x52\x61\x72\x21\x1A\x07\x00", b"\x00\x00\x00\x00\x00\x00\x00\x00", "RAR"], }
+
+recovery_running = True
+recovery_paused = False
+
+
+def pause_recovery():
+    global recovery_paused
+    recovery_paused = True
+    # print("Recovery paused.")
+    status_label.config(text="Status: Paused")
+
+
+def resume_recovery():
+    global recovery_paused
+    recovery_paused = False
+    # print("Recovery resumed.")
+    status_label.config(text="Status: Resumed")
+
+
+# Function to stop recovery
+def stop_recovery():
+    global recovery_running
+    recovery_running = False
+    # print("Recovery stopped.")
+    status_label.config(text="Status: Stopped")
 
 
 def start_recovery():
     # Create a new thread for the recover_File function
-    recovery_thread = threading.Thread(target=recover_File)
-    recovery_thread.start()
+    global recovery_running
+    if recovery_running:
+        recovery_thread = threading.Thread(target=recover_File)
+        recovery_thread.start()
+    else:
+        messagebox.showwarning("Warning", "Recovery is already in Progress!")
 
 
 def calculate_hash(byte_data):
@@ -110,7 +140,7 @@ def recover_File():
     drive = f"\\\\.\\{selected_drive}"
     fileD = open(drive, "rb")
 
-    total_size = os.path.getsize(drive) if os.path.exists(drive) else 10000000  # Fallback to estimate size
+    total_size = os.path.getsize(drive) if os.path.exists(drive) else 10000000
     size = 1024 if selected_filetype not in [".pdf", ".txt"] else 16384
     total_blocks = total_size // size
 
@@ -129,7 +159,7 @@ def recover_File():
 
     while byte:
         if selected_filetype == ".py":
-            keywords = [b"import", b"def", b"class", b"# -*- coding: utf-8 -*-"]  # Common Python file keywords
+            keywords = [b"import", b"def", b"class", b"# -*- coding: utf-8 -*-"]
             found = False
             for keyword in keywords:
                 if byte.find(keyword) >= 0:
@@ -140,20 +170,18 @@ def recover_File():
                 if file_hash not in recovered_hashes:
                     with open(os.path.join(directory, f'{int(time.time())}-python_file_{rcvd}.py'), "wb") as fileN:
                         try:
-                            # Try to decode bytes only for .py files, but catch decoding errors
-                            text = byte.decode('utf-8', errors='ignore')  # 'ignore' will skip non-UTF-8 bytes
-                            fileN.write(text.encode('utf-8'))  # Write back as UTF-8 after decoding
+                            text = byte.decode('utf-8', errors='ignore')
+                            fileN.write(text.encode('utf-8'))
                         except UnicodeDecodeError as e:
                             print(f"Decoding error: {e}")
-                            # If there are issues decoding, you can either skip or handle as necessary
                         recovered_hashes.add(file_hash)
-                        max_size = 2 * 1024 * 1024  # Set a 10 MB limit for .py files
+                        max_size = 2 * 1024 * 1024
                         written_size = 0
                         while True:
                             byte = fileD.read(size)
                             if not byte or written_size >= max_size:
                                 break
-                            fileN.write(byte)  # Write the rest as binary or handle decoding carefully
+                            fileN.write(byte)
                             written_size += len(byte)
                     rcvd += 1
 
@@ -175,7 +203,6 @@ def recover_File():
         if selected_filetype == ".txt":
             text_block = b''
             print(f"Reading block {offs} for TXT recovery")
-            # Collect printable byte sequences as long as the content looks like text
             while byte:
                 if is_printable(byte):
                     text_block += byte
@@ -187,11 +214,10 @@ def recover_File():
             if text_block:
                 print(f"Recovered a text block of size {len(text_block)} bytes")
 
-                # Try multiple encodings for decoding
                 decoded_text = None
                 for encoding in ['utf-8', 'iso-8859-1', 'ascii']:
                     try:
-                        decoded_text = text_block.decode(encoding, errors='replace')  # Replace invalid characters
+                        decoded_text = text_block.decode(encoding, errors='replace')
                         print(f"Decoded text block using {encoding} encoding.")
                         break
                     except (UnicodeDecodeError, LookupError):
@@ -211,27 +237,54 @@ def recover_File():
             offs += 1
             continue
 
-        if selected_filetype == ".rar":
-            found = byte.find(file_header)
-            if found >= 0:
-                file_hash = calculate_hash(byte[found:])
-                if file_hash not in recovered_hashes:
-                    with open(os.path.join(directory, f"{int(time.time())}_rar_file_{rcvd}.rar"), "wb") as fileN:
-                        fileN.write(byte[found:])
-                        recovered_hashes.add(file_hash)
+        # if selected_filetype == ".rar":
+        #     found = byte.find(file_header)
+        #     if found >= 0:
+        #         file_hash = calculate_hash(byte[found:])
+        #         if file_hash not in recovered_hashes:
+        #             with open(os.path.join(directory, f"{int(time.time())}_rar_file_{rcvd}.rar"), "wb") as fileN:
+        #                 fileN.write(byte[found:])
+        #                 recovered_hashes.add(file_hash)
+        #
+        #                 # Keep reading blocks until next file or EOF
+        #                 while True:
+        #                     byte = fileD.read(size)
+        #                     if not byte:
+        #                         break
+        #                     next_header_pos = byte.find(file_header)
+        #                     if next_header_pos >= 0:
+        #                         fileN.write(byte[:next_header_pos])
+        #                         break
+        #                     else:
+        #                         fileN.write(byte)
+        #     rcvd += 1
 
-                        # Keep reading blocks until next file or EOF
+        if selected_filetype == ".rar":
+            header_found = byte.find(file_header) if file_header else -1
+            if header_found >= 0:
+                file_hash = calculate_hash(byte[header_found:])
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory,
+                                           f"{int(time.time())}_{filetype_footer_header[selected_filetype][2]}_file_{rcvd}{selected_filetype}"),
+                              "wb") as fileN:
+                        fileN.write(byte[header_found:])
+                        recovered_hashes.add(file_hash)
                         while True:
                             byte = fileD.read(size)
                             if not byte:
                                 break
-                            next_header_pos = byte.find(file_header)
-                            if next_header_pos >= 0:
-                                fileN.write(byte[:next_header_pos])
-                                break
+                            if file_footer:
+                                footer_pos = byte.find(file_footer)
+                                if footer_pos >= 0:
+                                    fileN.write(byte[:footer_pos + len(file_footer)])
+                                    break
+                                else:
+                                    fileN.write(byte)
                             else:
                                 fileN.write(byte)
-            rcvd += 1
+                    rcvd += 1
+            byte = fileD.read(size)
+            continue
 
         if selected_filetype == ".gif":
             for header in file_header:
@@ -259,7 +312,7 @@ def recover_File():
             byte = fileD.read(size)
             offs += 1
 
-        if selected_filetype == ".exe": # Still Issue
+        if selected_filetype == ".exe":
             # Search for EXE header
             found = byte.find(file_header)
             if found >= 0:
@@ -315,7 +368,7 @@ def recover_File():
                 offs += 1
                 continue
 
-        if selected_filetype == ".doc" or selected_filetype == ".xls":
+        if selected_filetype == ".doc":
             found = byte.find(file_header)
             if found >= 0:
                 file_hash = calculate_hash(byte[found:])
@@ -331,9 +384,23 @@ def recover_File():
                                 break
                             fileN.write(byte)
                     rcvd += 1
-                continue
 
-        if selected_filetype == ".docx" or selected_filetype == ".xlsx":
+        if selected_filetype == ".xls":
+            found = byte.find(file_header)
+            if found >= 0:
+                file_hash = calculate_hash(byte[found:])
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f"{int(time.time())}_xls_file_{rcvd}.xls"), "wb") as fileN:
+                        fileN.write(byte[found:])
+                        recovered_hashes.add(file_hash)
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+                            fileN.write(byte)
+                rcvd += 1
+
+        if selected_filetype == ".docx":
             if byte.startswith(file_header):
                 file_hash = calculate_hash(byte)
                 if file_hash not in recovered_hashes:
@@ -348,6 +415,20 @@ def recover_File():
                             fileN.write(byte)
                     rcvd += 1
                 continue
+
+        if selected_filetype == ".xlsx":
+            if byte.startswith(file_header):
+                file_hash = calculate_hash(byte)
+                if file_hash not in recovered_hashes:
+                    with open(os.path.join(directory, f"{int(time.time())}_xlsx_file_{rcvd}.xlsx"), "wb") as fileN:
+                        fileN.write(byte)
+                        recovered_hashes.add(file_hash)
+                        while True:
+                            byte = fileD.read(size)
+                            if not byte:
+                                break
+                            fileN.write(byte)
+                rcvd += 1
 
         if selected_filetype not in [".txt", ".doc", ".docx", ".ppt", ".exe", ".xlsx", ".xls", ".gif", ".py", ".rar"]:
             found = byte.find(file_header)
@@ -406,7 +487,8 @@ driveDropdown.place(x=30, y=130)
 driveDropdown.config(width=30)
 driveDropdown.config(style="TCombobox")
 
-fileTypes = [".png", ".jpg", ".pdf", ".doc", ".txt", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".gif", ".exe", ".py", ".rar"]
+fileTypes = [".png", ".jpg", ".pdf", ".doc", ".txt", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".gif", ".exe", ".py",
+             ".rar"]
 fileDropdown = ttk.Combobox(root, values=fileTypes)
 fileDropdown.set("Select File Type")
 fileDropdown.place(x=30, y=190)
@@ -422,6 +504,18 @@ recoverButton = tk.Button(root,
                           command=start_recovery)
 recoverButton.config(text=f"Recover files")
 recoverButton.place(x=40, y=250)
+
+pauseButton = ttk.Button(root, text="Pause", command=pause_recovery)
+pauseButton.place(x=350, y=90)
+
+resumeButton = ttk.Button(root, text="Resume", command=resume_recovery)
+resumeButton.place(x=350, y=130)
+
+stopButton = ttk.Button(root, text="Stop", command=stop_recovery)
+stopButton.place(x=350, y=170)
+
+status_label = tk.Label(root, text="Status: Ready", font=("Consolas", 12))
+status_label.place(x=330, y=210)
 
 progress_var = tk.DoubleVar()
 progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate", variable=progress_var)
